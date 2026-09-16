@@ -1,0 +1,43 @@
+apiVersion: meta.pkg.upbound.io/v1alpha1
+kind: Controller
+metadata:
+  annotations:
+    friendly-name.meta.crossplane.io: Akuity Agent
+    meta.crossplane.io/description: |
+      Registers an Upbound control plane with Akuity and installs the Akuity
+      Argo CD (or Kargo) agent into it, so the control plane can be managed as
+      an Argo CD cluster from the Akuity Platform.
+    meta.crossplane.io/license: Apache-2.0
+    meta.crossplane.io/maintainer: Upbound Maintainers <info@upbound.io>
+    meta.crossplane.io/readme: |
+      The Akuity agent uses an agent architecture: components run inside the
+      target cluster rather than Argo CD reaching in with a kubeconfig. That
+      needs privileges a control plane's own connection secret does not carry,
+      which is why this ships as a Controller/AddOn package — the package is
+      applied by the platform, not by a control-plane admin.
+
+      Installation is a Helm pre-install hook Job that calls
+      `akuity argocd cluster create --upsert` and applies the manifests Akuity
+      returns. The control plane registers itself: `clusterName` defaults to
+      `<controlPlaneNamespace>-<controlPlaneName>`, templated per control plane.
+    meta.crossplane.io/source: https://docs.akuity.io/akuity-portal/automation/agent-helm-chart
+  name: akuity-agent
+spec:
+  packagingType: Helm
+  helm:
+    releaseName: akuity-agent
+    releaseNamespace: akuity
+    values:
+      agentType: argocd
+      # Templated per control plane by the Spaces controllerrevision reconciler.
+      # Akuity cluster names must be unique within an instance, so this is what
+      # makes one package serve a whole fleet with no per-CTP configuration.
+      clusterName: "{{ .spaces.controlPlaneNamespace }}-{{ .spaces.controlPlaneName }}"
+      # instanceName and organizationName are intentionally NOT set here: they
+      # are per-tenant, and the chart fails loudly if they are missing. Set them
+      # once per Space in a ControllerRuntimeConfig (see examples/).
+      existingSecret:
+        name: akuity-agent-credentials
+      image:
+        repository: xpkg.upbound.io/upbound/akuity-cli
+        tag: 0.32.2

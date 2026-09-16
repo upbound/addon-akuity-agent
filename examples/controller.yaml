@@ -1,0 +1,14 @@
+# Controller variant — the recommended shape in Spaces.
+#
+# The chart is applied by mxp-controller with the vcluster admin kubeconfig, so
+# there is no RBAC ceiling and no companion ClusterRole to apply. Requires
+# `features.alpha.upboundControllers.enabled=true` on the Space.
+apiVersion: pkg.upbound.io/v1alpha1
+kind: Controller
+metadata:
+  name: controller-akuity-agent
+spec:
+  package: xpkg.upbound.io/upbound/controller-akuity-agent:0.32.2
+  # Picked up automatically — runtimeConfigRef defaults to name "default".
+  runtimeConfigRef:
+    name: default

@@ -1,0 +1,188 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - 'main'
+    paths-ignore:
+      - 'docs/**'
+      - 'mkdocs.yml'
+  pull_request: {}
+  workflow_dispatch: {}
+
+env:
+  UP_API_TOKEN: ${{ secrets.UP_API_TOKEN }}
+  UP_ROBOT_ID: ${{ secrets.UP_ROBOT_ID }}
+  UP_ORG: ${{ secrets.UP_ORG }}
+
+jobs:
+  mirror-images:
+    name: Mirror Images
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install crane
+        uses: imjasonh/setup-crane@v0.1
+
+      - name: Login to xpkg with robot
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3
+        with:
+          registry: xpkg.upbound.io
+          username: ${{ env.UP_ROBOT_ID }}
+          password: ${{ env.UP_API_TOKEN }}
+
+      - name: Mirror images to xpkg.upbound.io
+        if: env.UP_API_TOKEN != ''
+        run: bash hack/sync-images.sh
+
+  publish-image:
+    name: Publish Image
+    needs: mirror-images
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package-type: [controller, addon]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install up
+        uses: upbound/action-up@v1
+        with:
+          skip-login: true
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: 'latest'
+
+      - name: Install yq
+        uses: dcarbone/install-yq-action@v1
+        with:
+          version: v4.35.1
+
+      - name: Install crane
+        uses: imjasonh/setup-crane@v0.1
+
+      - name: Login to xpkg with robot
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3
+        with:
+          registry: xpkg.upbound.io
+          username: ${{ env.UP_ROBOT_ID }}
+          password: ${{ env.UP_API_TOKEN }}
+
+      - name: Build and Publish
+        working-directory: ${{ matrix.package-type }}-package
+        if: env.UP_API_TOKEN != ''
+        run: |
+          set -euo pipefail
+          # Load chart attributes
+          source ../.chart-attributes
+          cp ../${{ matrix.package-type }}.yaml crossplane.yaml
+
+          echo "Using CHART_VERSION: $CHART_VERSION"
+
+          # Pull the chart from the OCI registry, apply patches/, seed the Argo CD
+          # CRDs. The upstream chart is OCI-only, so this is not a plain
+          # `helm pull --repo`.
+          mkdir helm
+          bash ../hack/pull-chart.sh helm
+
+          # Extract CRDs for the package. hack/template-values.yaml supplies dummy
+          # values for the three the chart marks `required`; without them
+          # `helm template` fails even though none of them affect the CRD set.
+          mkdir crds
+          HELM_VALUES=$(yq e '.spec.helm.values' crossplane.yaml)
+          VALUES_ARGS="-f ../hack/template-values.yaml"
+          if [ "$HELM_VALUES" != "null" ]; then
+            echo "$HELM_VALUES" > /tmp/meta-values.yaml
+            VALUES_ARGS="-f /tmp/meta-values.yaml $VALUES_ARGS"
+          fi
+          helm template $RELEASE_NAME helm/chart.tgz -n $RELEASE_NAME --include-crds --kube-version=1.25.0 $VALUES_ARGS | \
+            yq e 'select(.kind == "CustomResourceDefinition")' - | \
+            yq -s '("crds/" + .metadata.name + ".yaml")' -
+
+          # List the structure for verification
+          find . -type f | sort
+
+          # Build artifact
+          up xpkg build
+
+          # Find artifact
+          XPKG_FILENAME=$(find . -name "*.xpkg" -type f -printf "%f\n")
+
+          # Publish artifact
+          REPO_NAME=$(printf '%s' "$GITHUB_REPOSITORY" | sed 's/.*\///')
+          if [[ "${{ matrix.package-type }}" == "addon" ]]; then
+            export CONTROLLER_NAME=$(echo "$REPO_NAME" | sed 's/^controller/addon/')
+          else
+            export CONTROLLER_NAME=$(echo "$REPO_NAME" | sed 's/^addon/controller/')
+          fi
+
+          # Detect if running in a PR context
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            COMMIT_ID=$(echo "$GITHUB_SHA" | cut -c1-7)
+            CHART_VERSION="${CHART_VERSION}-${COMMIT_ID}"
+          fi
+
+          echo "UP_ORG=$UP_ORG" >> $GITHUB_ENV
+          echo "CONTROLLER_NAME=$CONTROLLER_NAME" >> $GITHUB_ENV
+          echo "CHART_VERSION=$CHART_VERSION" >> $GITHUB_ENV
+
+          up xpkg push xpkg.upbound.io/$UP_ORG/$CONTROLLER_NAME:$CHART_VERSION -f $XPKG_FILENAME
+
+      - name: Append package assets for Marketplace
+        if: env.UP_API_TOKEN != ''
+        run: |
+          extensions_dir=${{ github.workspace }}/extensions
+          mkdir -p $extensions_dir/readme
+          cp ./README.md $extensions_dir/readme/readme.md
+          up alpha xpkg append xpkg.upbound.io/${{ env.UP_ORG }}/${{ env.CONTROLLER_NAME }}:${{ env.CHART_VERSION }} --extensions-root $extensions_dir
+
+  run-e2e-tests:
+    name: Run e2e Tests
+    needs: publish-image
+    runs-on: ubuntu-latest
+    # Unlike other addon packages this one cannot be tested offline: the chart's
+    # pre-install Job registers the cluster against akuity.cloud. Without an
+    # Akuity tenant in secrets the steps below no-op rather than failing red.
+    # (`secrets` is not available in a job-level `if`, so the guard is per-step.)
+    env:
+      AKUITY_API_KEY_ID: ${{ secrets.AKUITY_API_KEY_ID }}
+      AKUITY_API_KEY_SECRET: ${{ secrets.AKUITY_API_KEY_SECRET }}
+      AKUITY_ORGANIZATION: ${{ secrets.AKUITY_ORGANIZATION }}
+      AKUITY_INSTANCE: ${{ secrets.AKUITY_INSTANCE }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install and login with up
+        if: env.UP_API_TOKEN != '' && env.UP_ORG != ''
+        uses: upbound/action-up@v1
+        with:
+          api-token: ${{ secrets.UP_API_TOKEN }}
+          organization: ${{ secrets.UP_ORG }}
+
+      - name: Login to xpkg with robot
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3
+        with:
+          registry: xpkg.upbound.io
+          username: ${{ env.UP_ROBOT_ID }}
+          password: ${{ env.UP_API_TOKEN }}
+
+      - name: Build project
+        run: up project build
+
+      - name: Run e2e tests
+        if: env.UP_API_TOKEN != '' && env.UP_ORG != '' && env.AKUITY_API_KEY_ID != ''
+        run: |
+          source .chart-attributes
+
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            COMMIT_ID=$(echo "$GITHUB_SHA" | cut -c1-7)
+            CHART_VERSION="${CHART_VERSION}-${COMMIT_ID}"
+          fi
+
+          UP_CHART_VERSION=$CHART_VERSION up test run tests/* --e2e --local

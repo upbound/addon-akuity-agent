@@ -1,0 +1,50 @@
+apiVersion: meta.pkg.upbound.io/v1beta1
+kind: AddOn
+metadata:
+  annotations:
+    friendly-name.meta.crossplane.io: Akuity Agent
+    meta.crossplane.io/description: |
+      Registers an Upbound control plane with Akuity and installs the Akuity
+      Argo CD (or Kargo) agent into it, so the control plane can be managed as
+      an Argo CD cluster from the Akuity Platform.
+    meta.crossplane.io/license: Apache-2.0
+    meta.crossplane.io/maintainer: Upbound Maintainers <info@upbound.io>
+    meta.crossplane.io/readme: |
+      The Akuity agent uses an agent architecture: components run inside the
+      target cluster rather than Argo CD reaching in with a kubeconfig. That
+      needs privileges a control plane's own connection secret does not carry,
+      which is why this ships as a Controller/AddOn package — the package is
+      applied by the platform, not by a control-plane admin.
+
+      Installation is a Helm pre-install hook Job that calls
+      `akuity argocd cluster create --upsert` and applies the manifests Akuity
+      returns. Each control plane needs its own `clusterName`, set in an
+      AddOnRuntimeConfig; the Controller variant of this package templates that
+      name automatically.
+    meta.crossplane.io/source: https://docs.akuity.io/akuity-portal/automation/agent-helm-chart
+    meta.upbound.io/host: |
+      - UXP
+      - Spaces
+    meta.upbound.io/subscription: |
+      - Standard
+      - Enterprise
+      - Business Critical
+  name: akuity-agent
+spec:
+  packagingType: Helm
+  helm:
+    releaseName: akuity-agent
+    releaseNamespace: akuity
+    values:
+      agentType: argocd
+      # NOTE: unlike the Controller variant, the AddOn path has no
+      # `{{ .spaces.* }}` value templating — the UXP addonrevision reconciler
+      # only merges package values with AddOnRuntimeConfig values. So
+      # clusterName cannot self-template and MUST be set per control plane in an
+      # AddOnRuntimeConfig, along with instanceName and organizationName. All
+      # three are required by the chart and it fails loudly if they are missing.
+      existingSecret:
+        name: akuity-agent-credentials
+      image:
+        repository: xpkg.upbound.io/upbound/akuity-cli
+        tag: 0.32.2

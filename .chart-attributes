@@ -1,0 +1,15 @@
+CHART_NAME=akuity-agent
+CHART_VERSION=0.32.2
+RELEASE_NAME=akuity-agent
+# The Akuity chart is only published to an OCI registry, not a classic Helm repo.
+REPO_URL=oci://quay.io/akuity/akuity-platform-charts
+# Tag of quay.io/akuity/akuity-cli mirrored into xpkg.upbound.io. Akuity ships a
+# CLI tag matching each chart version; the chart's own default is `latest`, which
+# we deliberately do not ship.
+CLI_VERSION=0.32.2
+# Argo CD CRDs seeded into the chart by hack/pull-chart.sh. See README
+# "Why this package ships Argo CD CRDs" — the short version is that the Akuity
+# agent bundle contains no CRDs, and `up xpkg build` refuses to build a
+# Controller package with none (AtLeastOneCRD, up/internal/xpkg/lint.go).
+ARGOCD_VERSION=v3.0.6
+ARGOCD_CRDS="application-crd appproject-crd"

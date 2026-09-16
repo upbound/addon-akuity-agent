@@ -1,0 +1,7 @@
+# Dummy values used ONLY to render the chart during the build, so that CRDs can
+# be extracted. The chart marks clusterName/instanceName/organizationName as
+# `required`, so `helm template` fails without them even though none of them
+# affect the (empty) CRD set. These values never reach a package.
+clusterName: build
+instanceName: build
+organizationName: build

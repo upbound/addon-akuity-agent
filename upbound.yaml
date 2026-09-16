@@ -1,0 +1,16 @@
+apiVersion: meta.dev.upbound.io/v2alpha1
+kind: Project
+metadata:
+  name: addon-akuity-agent
+spec:
+  apiDependencies:
+  - k8s:
+      version: v1.33.0
+    type: k8s
+  description: addon-akuity-agent
+  license: Apache-2.0
+  maintainer: Upbound Maintainers <info@upbound.io>
+  readme: |
+    Test for addon-akuity-agent
+  repository: xpkg.upbound.io/upbound/addon-akuity-agent_test
+  source: github.com/upbound/addon-akuity-agent

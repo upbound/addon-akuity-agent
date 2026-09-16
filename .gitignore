@@ -1,0 +1,7 @@
+helm
+crds
+.up
+_output
+extensions/readme
+*-package
+patches-work

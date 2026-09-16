@@ -1,0 +1,12 @@
+# AddOn variant — for UXP control planes where the Controller feature is not
+# enabled. Needs manifests/addon-cluster-role.yaml on Spaces < v1.19, and needs a
+# per-control-plane AddOnRuntimeConfig because the AddOn path has no
+# `{{ .spaces.* }}` value templating.
+apiVersion: pkg.upbound.io/v1beta1
+kind: AddOn
+metadata:
+  name: akuity-agent
+spec:
+  package: xpkg.upbound.io/upbound/addon-akuity-agent:0.32.2
+  runtimeConfigRef:
+    name: default

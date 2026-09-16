@@ -1,0 +1,16 @@
+# Per-control-plane configuration for the AddOn variant.
+#
+# clusterName MUST be unique per control plane — Akuity rejects a second cluster
+# registering under a name already taken. With the AddOn path this value cannot
+# be templated, so this object differs for every control plane. If you are
+# provisioning control planes from a composition, render it there.
+apiVersion: pkg.upbound.io/v1beta1
+kind: AddOnRuntimeConfig
+metadata:
+  name: default
+spec:
+  helm:
+    values:
+      clusterName: default-my-control-plane
+      instanceName: my-argocd-instance
+      organizationName: my-akuity-org

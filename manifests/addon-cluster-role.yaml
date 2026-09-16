@@ -1,0 +1,157 @@
+# RBAC required by the Upbound controller manager to install the Akuity agent as
+# an AddOn.
+#
+# WHEN YOU NEED THIS
+#   Spaces < v1.19, or any control plane whose upbound-controller-manager is not
+#   bound to cluster-admin. SPA-791 (upbound/spaces#4376, merged 2026-09-09,
+#   ships in v1.19) creates a cluster-admin ClusterRoleBinding for the UXP v2
+#   controller manager when addons are enabled, which makes this file redundant
+#   there. It does NOT cover UXP v1 control planes.
+#
+# WHY IT IS A SUPERSET OF THE CHART'S OWN ROLE
+#   The chart creates its own `akuity-agent-register` ClusterRole. Kubernetes
+#   escalation-prevention only lets a subject create a role whose rules it holds
+#   itself (or can `escalate`), so everything the chart grants has to appear here
+#   too.
+#
+# The rule that is actually missing from the stock aggregate — measured on Spaces
+# v1.17.3 against both a v1 (1.20.10-up.1) and a v2 (2.1.8-up.4) control plane —
+# is `batch/jobs`. The controller manager already holds escalate and bind, and
+# already creates Deployments, so the chart's ClusterRole applies fine; the
+# install fails on the register Job. PodDisruptionBudgets and NetworkPolicies are
+# also absent from the aggregate and are needed for the role the chart creates.
+#
+# This ClusterRole is an install-time artifact applied by a Space operator. It is
+# deliberately NOT built into the package: `up xpkg build` parses every YAML in
+# the package root against the Crossplane package scheme, which has no
+# ClusterRole kind.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: upbound-addon:akuity-agent
+rules:
+# --- What the AddOn reconciler applies directly (the Helm release itself) ---
+- apiGroups:
+  - ""
+  resources:
+  - namespaces
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - secrets
+  - serviceaccounts
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+# The register Job. This is the rule the stock aggregate is missing and the one
+# that makes an unmodified Space reject this chart.
+- apiGroups:
+  - batch
+  resources:
+  - jobs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  - pods/log
+  - events
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - clusterroles
+  - clusterrolebindings
+  - roles
+  - rolebindings
+  verbs:
+  - bind
+  - create
+  - delete
+  - escalate
+  - get
+  - list
+  - patch
+  - update
+  - watch
+# --- Superset of the chart's own `akuity-agent-register` ClusterRole ---
+# (core namespaces/configmaps/secrets/services/serviceaccounts are covered above)
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  - statefulsets
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - networkpolicies
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+- apiGroups:
+  - policy
+  resources:
+  - poddisruptionbudgets
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+# Only used when agentType is "kargo", but the role has to carry it or the
+# chart's role creation is refused on a Kargo install.
+- apiGroups:
+  - admissionregistration.k8s.io
+  resources:
+  - mutatingwebhookconfigurations
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: upbound-addon:akuity-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: upbound-addon:akuity-agent
+subjects:
+- kind: ServiceAccount
+  name: upbound-controller-manager
+  namespace: crossplane-system

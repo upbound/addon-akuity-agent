@@ -1,0 +1,20 @@
+# Per-Space Akuity tenant configuration for the Controller variant.
+#
+# clusterName is NOT set here: the package value
+#   clusterName: "{{ .spaces.controlPlaneNamespace }}-{{ .spaces.controlPlaneName }}"
+# is templated per control plane by the Spaces controllerrevision reconciler, so
+# every control plane self-registers under its own unique name with no per-CTP
+# configuration. Only the tenant-level values belong here.
+apiVersion: pkg.upbound.io/v1alpha1
+kind: ControllerRuntimeConfig
+metadata:
+  name: default
+spec:
+  helm:
+    values:
+      instanceName: my-argocd-instance
+      organizationName: my-akuity-org
+      # Self-hosted Akuity: point this at your own endpoint.
+      # akuityServerUrl: https://akuity.example.com
+      argocd:
+        project: platform

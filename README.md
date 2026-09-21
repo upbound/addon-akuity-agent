@@ -43,13 +43,147 @@ On **Spaces >= v1.19** nothing extra is needed: SPA-791
 ([upbound/spaces#4376](https://github.com/upbound/spaces/pull/4376)) binds the
 UXP v2 `upbound-controller-manager` to `cluster-admin` when addons are enabled.
 
-On **older Spaces, and on UXP v1 control planes**, apply the companion role:
+On **older Spaces, and on UXP v1 control planes**, apply the companion role
+below (also in the repo as `manifests/addon-cluster-role.yaml`).
 
-```bash
-kubectl apply -f manifests/addon-cluster-role.yaml
+It is a superset of the chart's own `akuity-agent-register` ClusterRole:
+Kubernetes escalation-prevention only lets a subject create a role whose rules it
+holds itself, so everything the chart grants has to appear here too.
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: upbound-addon:akuity-agent
+rules:
+# --- What the AddOn reconciler applies directly (the Helm release itself) ---
+- apiGroups:
+  - ""
+  resources:
+  - namespaces
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - secrets
+  - serviceaccounts
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+# The register Job. This is the rule the stock aggregate is missing and the one
+# that makes an unmodified Space reject this chart.
+- apiGroups:
+  - batch
+  resources:
+  - jobs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  - pods/log
+  - events
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - clusterroles
+  - clusterrolebindings
+  - roles
+  - rolebindings
+  verbs:
+  - bind
+  - create
+  - delete
+  - escalate
+  - get
+  - list
+  - patch
+  - update
+  - watch
+# --- Superset of the chart's own `akuity-agent-register` ClusterRole ---
+# (core namespaces/configmaps/secrets/services/serviceaccounts are covered above)
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  - statefulsets
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - networkpolicies
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+- apiGroups:
+  - policy
+  resources:
+  - poddisruptionbudgets
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+# Only used when agentType is "kargo", but the role has to carry it or the
+# chart's role creation is refused on a Kargo install.
+- apiGroups:
+  - admissionregistration.k8s.io
+  resources:
+  - mutatingwebhookconfigurations
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: upbound-addon:akuity-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: upbound-addon:akuity-agent
+subjects:
+- kind: ServiceAccount
+  name: upbound-controller-manager
+  namespace: crossplane-system
 ```
 
-This is a Space-operator action — a control-plane admin cannot create it
+Applying it is a Space-operator action — a control-plane admin cannot create it
 (escalation prevention). Measured on Spaces v1.17.3 against both a v1
 (`1.20.10-up.1`) and a v2 (`2.1.8-up.4`) control plane, the aggregate is missing
 `batch/jobs`, `policy/poddisruptionbudgets` and `networking.k8s.io/networkpolicies`.
@@ -64,9 +198,47 @@ chart is patched (`patches/0001-existing-secret.patch`) to add the standard
 `existingSecret` idiom, so the key can be delivered by a `SharedExternalSecret`
 from the Space's secret store:
 
-```bash
-kubectl apply -f examples/shared-external-secret.yaml
+Apply this in the Space (the group namespace), not inside the control plane:
+
+```yaml
+apiVersion: spaces.upbound.io/v1alpha1
+kind: SharedExternalSecret
+metadata:
+  name: akuity-agent-credentials
+  namespace: default
+spec:
+  controlPlaneSelector:
+    labelSelectors:
+      - matchLabels:
+          akuity.io/register: "true"
+  namespaceSelector:
+    names:
+      - akuity
+  externalSecretSpec:
+    refreshInterval: 1h
+    target:
+      # Must match `existingSecret.name` in the package values.
+      name: akuity-agent-credentials
+    secretStoreRef:
+      name: vault-backend
+      kind: ClusterSecretStore
+    data:
+      - secretKey: AKUITY_API_KEY_ID
+        remoteRef:
+          key: /platform/akuity
+          property: api_key_id
+      - secretKey: AKUITY_API_KEY_SECRET
+        remoteRef:
+          key: /platform/akuity
+          property: api_key_secret
 ```
+
+**Ordering note.** Helm creates the release namespace (`akuity`) at install time
+with `CreateNamespace`, so the Secret may not be projected there yet when the
+pre-install Job is created. That is fine — the Job's pod stays in
+`CreateContainerConfigError` and kubelet retries until the Secret appears, well
+within the 10-minute Helm wait. To avoid the race entirely, set
+`releaseNamespace` to a namespace the `SharedExternalSecret` already populates.
 
 Neither `AddOnRuntimeConfig` nor `ControllerRuntimeConfig` supports
 `valuesFrom`/`secretRef` (`spec.helm.values` is a free-form object and nothing
@@ -76,19 +248,83 @@ until they do, this package cannot ship the chart unmodified.
 
 ## Install
 
+Both variants are applied in the Space. Every manifest below is also in the repo
+under `examples/`.
+
 ### Controller (recommended)
 
-```bash
-kubectl apply -f examples/controller-runtime-config.yaml   # tenant: org + instance
-kubectl apply -f examples/controller.yaml
+The chart is applied by `mxp-controller` with the vcluster admin kubeconfig, so
+there is no RBAC ceiling and no companion ClusterRole to apply. Requires
+`features.alpha.upboundControllers.enabled=true` on the Space.
+
+First the tenant configuration. `clusterName` is deliberately **not** set here —
+the package templates it per control plane, so every control plane self-registers
+under its own unique name with no per-control-plane configuration:
+
+```yaml
+apiVersion: pkg.upbound.io/v1alpha1
+kind: ControllerRuntimeConfig
+metadata:
+  name: default
+spec:
+  helm:
+    values:
+      instanceName: my-argocd-instance
+      organizationName: my-akuity-org
+      # Self-hosted Akuity: point this at your own endpoint.
+      # akuityServerUrl: https://akuity.example.com
+      argocd:
+        project: platform
+```
+
+Then the Controller itself:
+
+```yaml
+apiVersion: pkg.upbound.io/v1alpha1
+kind: Controller
+metadata:
+  name: controller-akuity-agent
+spec:
+  package: xpkg.upbound.io/upbound/controller-akuity-agent:0.32.2
+  # Picked up automatically — runtimeConfigRef defaults to name "default".
+  runtimeConfigRef:
+    name: default
 ```
 
 ### AddOn
 
-```bash
-kubectl apply -f manifests/addon-cluster-role.yaml         # Spaces < v1.19 only
-kubectl apply -f examples/addon-runtime-config.yaml        # per control plane
-kubectl apply -f examples/addon.yaml
+For UXP control planes where the Controller feature is not enabled. On Spaces
+< v1.19 apply the ClusterRole from [AddOn RBAC](#addon-rbac) first.
+
+One `AddOnRuntimeConfig` is needed **per control plane** — `clusterName` must be
+unique (Akuity rejects a second cluster registering under a name already taken)
+and the AddOn path has no `{{ .spaces.* }}` value templating. If you provision
+control planes from a composition, render this object there:
+
+```yaml
+apiVersion: pkg.upbound.io/v1beta1
+kind: AddOnRuntimeConfig
+metadata:
+  name: default
+spec:
+  helm:
+    values:
+      clusterName: default-my-control-plane
+      instanceName: my-argocd-instance
+      organizationName: my-akuity-org
+```
+
+Then the AddOn itself:
+
+```yaml
+apiVersion: pkg.upbound.io/v1beta1
+kind: AddOn
+metadata:
+  name: akuity-agent
+spec:
+  package: xpkg.upbound.io/upbound/addon-akuity-agent:0.32.2
+  runtimeConfigRef:
+    name: default
 ```
 
 ## What this package does not fix

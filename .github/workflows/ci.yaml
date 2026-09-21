@@ -73,6 +73,12 @@ jobs:
           username: ${{ env.UP_ROBOT_ID }}
           password: ${{ env.UP_API_TOKEN }}
 
+      # The package directory is gitignored (*-package), so it does not exist in
+      # a fresh checkout. `working-directory` is resolved before the step runs,
+      # so it has to be created in a step of its own.
+      - name: Create working directory
+        run: mkdir -p ${{ matrix.package-type }}-package
+
       - name: Build and Publish
         working-directory: ${{ matrix.package-type }}-package
         if: env.UP_API_TOKEN != ''

@@ -8,7 +8,7 @@ kind: Controller
 metadata:
   name: controller-akuity-agent
 spec:
-  package: xpkg.upbound.io/upbound/controller-akuity-agent:0.32.2
+  package: xpkg.upbound.io/upbound/controller-akuity-agent:0.32.2-up.2
   # Picked up automatically — runtimeConfigRef defaults to name "default".
   runtimeConfigRef:
     name: default

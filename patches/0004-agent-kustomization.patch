@@ -1,0 +1,135 @@
+diff -urN base/templates/_helpers.tpl akuity-agent/templates/_helpers.tpl
+--- a/templates/_helpers.tpl	2026-09-28 12:34:05
++++ b/templates/_helpers.tpl	2026-09-28 12:35:08
+@@ -35,6 +35,8 @@
+ */}}
+ {{- define "akuity-agent.createFlags" -}}
+ {{- $registry := coalesce .Values.argocd.argoprojCustomImageRegistry .Values.argoprojCustomImageRegistry -}}
++{{- if .Values.argocd.akuityCustomImageRegistry }} --akuity-custom-image-registry {{ .Values.argocd.akuityCustomImageRegistry | quote }}{{- end }}
++{{- if .Values.agentKustomization }} --kustomization-path {{ include "akuity-agent.kustomizationPath" . | quote }}{{- end }}
+ {{- $project := coalesce .Values.argocd.project .Values.project -}}
+ {{- if .Values.version }} --version {{ .Values.version | quote }}{{- end }}
+ {{- if .Values.agentSize }} --agent-size {{ .Values.agentSize | quote }}{{- end }}
+@@ -60,7 +62,18 @@
+ {{/*
+ Extra flags for the `kargo agent create` command.
+ */}}
++{{/*
++Path the agent kustomization is mounted at inside the register Job.
++*/}}
++{{- define "akuity-agent.kustomizationPath" -}}
++{{- if and .Values.agentKustomization .Values.kargo.kustomizationPath -}}
++{{- fail "set either agentKustomization (contents, mounted by this chart) or kargo.kustomizationPath (a path inside the register Job), not both" -}}
++{{- end -}}
++/etc/akuity/kustomize/kustomization.yaml
++{{- end }}
++
+ {{- define "akuity-agent.kargoCreateFlags" -}}
++{{- if .Values.agentKustomization }} --kustomization-path {{ include "akuity-agent.kustomizationPath" . | quote }}{{- end }}
+ {{- if .Values.version }} --version {{ .Values.version | quote }}{{- end }}
+ {{- if .Values.agentSize }} --agent-size {{ .Values.agentSize | quote }}{{- end }}
+ {{- range .Values.labels }} --label {{ . | quote }}{{- end }}
+@@ -73,7 +86,7 @@
+ {{- if .Values.kargo.argocdNamespace }} --argocd-namespace {{ .Values.kargo.argocdNamespace | quote }}{{- end }}
+ {{- if .Values.kargo.kargoCustomImageRegistry }} --kargo-custom-image-registry {{ .Values.kargo.kargoCustomImageRegistry | quote }}{{- end }}
+ {{- if .Values.kargo.akuityCustomImageRegistry }} --akuity-custom-image-registry {{ .Values.kargo.akuityCustomImageRegistry | quote }}{{- end }}
+-{{- if .Values.kargo.kustomizationPath }} --kustomization-path {{ .Values.kargo.kustomizationPath | quote }}{{- end }}
++{{- if and .Values.kargo.kustomizationPath (not .Values.agentKustomization) }} --kustomization-path {{ .Values.kargo.kustomizationPath | quote }}{{- end }}
+ {{- if .Values.kargo.defaultShard }} --default-shard=true{{- end }}
+ {{- range .Values.extraArgs }} {{ . | quote }}{{- end }}
+ {{- end }}
+diff -urN base/templates/kustomization.yaml akuity-agent/templates/kustomization.yaml
+--- a/templates/kustomization.yaml	1970-01-01 01:00:00
++++ b/templates/kustomization.yaml	2026-09-28 12:34:26
+@@ -0,0 +1,23 @@
++{{- if .Values.agentKustomization }}
++# Kustomization uploaded with the cluster at registration. `akuity argocd
++# cluster create --kustomization-path` reads this file and sends it to Akuity as
++# ClusterCustomization.kustomization; the agent manifests returned by
++# get-agent-manifests are then built through it.
++#
++# Hook weight -1 puts it alongside the ServiceAccount, before the register Job
++# at weight 0, so the volume resolves when the pod is created.
++apiVersion: v1
++kind: ConfigMap
++metadata:
++  name: akuity-agent-kustomization
++  namespace: {{ .Release.Namespace }}
++  labels:
++    {{- include "akuity-agent.labels" . | nindent 4 }}
++  annotations:
++    "helm.sh/hook": pre-install
++    "helm.sh/hook-weight": "-1"
++    "helm.sh/hook-delete-policy": before-hook-creation
++data:
++  kustomization.yaml: |
++    {{- .Values.agentKustomization | nindent 4 }}
++{{- end }}
+diff -urN base/templates/register-job.yaml akuity-agent/templates/register-job.yaml
+--- a/templates/register-job.yaml	2026-09-28 12:34:05
++++ b/templates/register-job.yaml	2026-09-28 12:34:26
+@@ -20,10 +20,22 @@
+       imagePullSecrets:
+         {{- toYaml . | nindent 8 }}
+       {{- end }}
++      {{- if .Values.agentKustomization }}
++      volumes:
++        - name: agent-kustomization
++          configMap:
++            name: akuity-agent-kustomization
++      {{- end }}
+       containers:
+         - name: register
+           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+           imagePullPolicy: {{ .Values.image.pullPolicy }}
++          {{- if .Values.agentKustomization }}
++          volumeMounts:
++            - name: agent-kustomization
++              mountPath: {{ include "akuity-agent.kustomizationPath" . | dir | quote }}
++              readOnly: true
++          {{- end }}
+           command:
+             - sh
+             - -c
+diff -urN base/values.yaml akuity-agent/values.yaml
+--- a/values.yaml	2026-09-28 12:34:05
++++ b/values.yaml	2026-09-28 12:34:26
+@@ -51,10 +51,38 @@
+ # -- Additional arguments to pass to the agent create command, e.g. ["--some-flag", "value"]
+ extraArgs: []
+ 
++# -- Kustomization applied to the agent manifests, as the literal contents of a
++#    kustomization.yaml. The register Job mounts this and passes
++#    --kustomization-path, so the CLI uploads it with the cluster and Akuity
++#    builds the agent manifests through it.
++#
++#    This is the only way to change the agent workloads themselves: they are
++#    generated server-side, not rendered by this chart. Use it to add
++#    imagePullSecrets to the agent's ServiceAccounts, set resource limits, and
++#    so on. `imagePullSecrets` above covers only this chart's register Job.
++#
++#    e.g.:
++#    agentKustomization: |
++#      apiVersion: kustomize.config.k8s.io/v1beta1
++#      kind: Kustomization
++#      patches:
++#        - target:
++#            kind: ServiceAccount
++#          patch: |
++#            - op: add
++#              path: /imagePullSecrets
++#              value:
++#                - name: my-pull-secret
++agentKustomization: ""
++
+ # Options below only apply when agentType is "argocd".
+ argocd:
+   # -- Custom image registry for argoproj images (optional)
+   argoprojCustomImageRegistry: ""
++  # -- Custom image registry for Akuity's own agent images (optional). The
++  #    chart only exposed this for agentType "kargo"; `akuity argocd cluster
++  #    create` accepts it too.
++  akuityCustomImageRegistry: ""
+   # -- Project to associate the cluster with (optional)
+   project: ""
+   # -- Disable automatic agent upgrades

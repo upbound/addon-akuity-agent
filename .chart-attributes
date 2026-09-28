@@ -1,6 +1,12 @@
 CHART_NAME=akuity-agent
 CHART_VERSION=0.32.2
 RELEASE_NAME=akuity-agent
+# Version this package is published under. It is deliberately NOT CHART_VERSION:
+# this package patches the upstream chart (see patches/), so a fix on our side
+# has to be shippable without either overwriting an already-published tag or
+# waiting for Akuity to cut a new chart. Bump the -up.N suffix for a
+# package-only change; reset it when CHART_VERSION moves.
+PACKAGE_VERSION=0.32.2-up.2
 # The Akuity chart is only published to an OCI registry, not a classic Helm repo.
 REPO_URL=oci://quay.io/akuity/akuity-platform-charts
 # Tag of quay.io/akuity/akuity-cli mirrored into xpkg.upbound.io. Akuity ships a

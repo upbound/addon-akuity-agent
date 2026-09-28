@@ -7,6 +7,6 @@ kind: AddOn
 metadata:
   name: akuity-agent
 spec:
-  package: xpkg.upbound.io/upbound/addon-akuity-agent:0.32.2
+  package: xpkg.upbound.io/upbound/addon-akuity-agent:0.32.2-up.2
   runtimeConfigRef:
     name: default

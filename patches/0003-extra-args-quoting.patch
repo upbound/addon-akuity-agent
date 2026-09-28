@@ -1,0 +1,19 @@
+diff -urN work/c/templates/_helpers.tpl work/b/templates/_helpers.tpl
+--- a/templates/_helpers.tpl	2026-09-28 09:51:50
++++ b/templates/_helpers.tpl	2026-09-28 09:51:26
+@@ -47,7 +47,7 @@
+ {{- if or .Values.argocd.stateReplication .Values.stateReplication }} --state-replication{{- end }}
+ {{- if or .Values.argocd.redisTunneling .Values.redisTunneling }} --redis-tunneling{{- end }}
+ {{- if or .Values.argocd.namespaceScoped .Values.namespaceScoped }} --namespace-scoped{{- end }}
+-{{- range .Values.extraArgs }} {{ . }}{{- end }}
++{{- range .Values.extraArgs }} {{ . | quote }}{{- end }}
+ {{- end }}
+ 
+ {{/*
+@@ -75,5 +75,5 @@
+ {{- if .Values.kargo.akuityCustomImageRegistry }} --akuity-custom-image-registry {{ .Values.kargo.akuityCustomImageRegistry | quote }}{{- end }}
+ {{- if .Values.kargo.kustomizationPath }} --kustomization-path {{ .Values.kargo.kustomizationPath | quote }}{{- end }}
+ {{- if .Values.kargo.defaultShard }} --default-shard=true{{- end }}
+-{{- range .Values.extraArgs }} {{ . }}{{- end }}
++{{- range .Values.extraArgs }} {{ . | quote }}{{- end }}
+ {{- end }}

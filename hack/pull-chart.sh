@@ -8,6 +8,19 @@
 # patches/0001-existing-secret.patch adds the standard `existingSecret` idiom so
 # the key can be delivered by a SharedExternalSecret instead.
 #
+# The other patches close gaps that block real installations:
+#   0002-image-pull-secrets.patch  adds `imagePullSecrets`, so the register image
+#       can come from an authenticated mirror in clusters that cannot pull from
+#       quay.io.
+#   0003-extra-args-quoting.patch  quotes each `extraArgs` element. The flags are
+#       interpolated into a `sh -c` script, so an unquoted value containing a
+#       space was word-split into separate arguments.
+#   0004-agent-kustomization.patch  mounts an `agentKustomization` into the
+#       register Job and passes --kustomization-path, which is the only way to
+#       change the agent workloads (they are generated server-side, not rendered
+#       by this chart). Also exposes argocd.akuityCustomImageRegistry, which the
+#       CLI accepts but the chart only offered for agentType "kargo".
+#
 # Usage: hack/pull-chart.sh <dest-dir>   # writes <dest-dir>/chart.tgz
 set -euo pipefail
 

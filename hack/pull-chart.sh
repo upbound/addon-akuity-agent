@@ -15,6 +15,11 @@
 #   0003-extra-args-quoting.patch  quotes each `extraArgs` element. The flags are
 #       interpolated into a `sh -c` script, so an unquoted value containing a
 #       space was word-split into separate arguments.
+#   0004-agent-kustomization.patch  mounts an `agentKustomization` into the
+#       register Job and passes --kustomization-path, which is the only way to
+#       change the agent workloads (they are generated server-side, not rendered
+#       by this chart). Also exposes argocd.akuityCustomImageRegistry, which the
+#       CLI accepts but the chart only offered for agentType "kargo".
 #
 # Usage: hack/pull-chart.sh <dest-dir>   # writes <dest-dir>/chart.tgz
 set -euo pipefail

@@ -285,7 +285,7 @@ kind: Controller
 metadata:
   name: controller-akuity-agent
 spec:
-  package: xpkg.upbound.io/upbound/controller-akuity-agent:0.32.2-up.1
+  package: xpkg.upbound.io/upbound/controller-akuity-agent:0.32.2-up.2
   # Picked up automatically — runtimeConfigRef defaults to name "default".
   runtimeConfigRef:
     name: default
@@ -322,7 +322,7 @@ kind: AddOn
 metadata:
   name: akuity-agent
 spec:
-  package: xpkg.upbound.io/upbound/addon-akuity-agent:0.32.2-up.1
+  package: xpkg.upbound.io/upbound/addon-akuity-agent:0.32.2-up.2
   runtimeConfigRef:
     name: default
 ```
@@ -403,8 +403,8 @@ What *is* reachable is the registry those images are pulled from, decided by
 | Flag | Exposed as | Effect |
 |---|---|---|
 | `--argoproj-custom-image-registry` | `argocd.argoprojCustomImageRegistry` | Argo CD (argoproj) images |
-| `--akuity-custom-image-registry` | *(not a chart value — pass via `extraArgs`)* | Akuity's own agent images |
-| `--kustomization-path` | *(not usable from this chart — see below)* | Kustomization applied to the rendered agent manifests |
+| `--akuity-custom-image-registry` | `argocd.akuityCustomImageRegistry` | Akuity's own agent images |
+| `--kustomization-path` | `agentKustomization` | Kustomization applied to the agent manifests |
 
 **Prefer redirecting the registry.** If your mirror needs no authentication,
 pointing both registries at it removes the problem rather than working around
@@ -416,18 +416,46 @@ spec:
     values:
       argocd:
         argoprojCustomImageRegistry: registry.internal.example.com/argoproj
-      extraArgs:
-        - --akuity-custom-image-registry
-        - registry.internal.example.com/akuity
+        akuityCustomImageRegistry: registry.internal.example.com/akuity
 ```
 
-If your mirror *does* need credentials, `--kustomization-path` is the CLI's
-answer — it patches the rendered agent manifests, which is where an
-`imagePullSecrets` patch would go. It is not usable from this chart today: the
-flag takes a path to a `kustomization.yaml` that must exist inside the register
-Job's container, and the chart has no way to mount a ConfigMap or volume into
-that Job. Closing that gap is a chart patch on our side, not an Akuity
-limitation.
+### Pull secrets on the agent workloads
+
+If your mirror *does* need credentials, set `agentKustomization`. The register
+Job mounts it as a `kustomization.yaml` and passes `--kustomization-path`, so
+the CLI uploads it with the cluster (as `ClusterCustomization.kustomization`)
+and Akuity builds the agent manifests through it:
+
+```yaml
+spec:
+  helm:
+    values:
+      agentKustomization: |
+        apiVersion: kustomize.config.k8s.io/v1beta1
+        kind: Kustomization
+        patches:
+          - target:
+              kind: ServiceAccount
+            patch: |
+              - op: add
+                path: /imagePullSecrets
+                value:
+                  - name: my-pull-secret
+```
+
+No `resources:` — Akuity supplies those. The same mechanism sets resource
+limits, node selectors or anything else on the agent workloads.
+
+> The kustomization is uploaded and applied **server-side**, so the exact schema
+> Akuity accepts is theirs, not ours. The patch above is validated locally with
+> `kubectl kustomize` but has not been run against a live tenant; if Akuity
+> rejects it, the registration Job fails loudly rather than installing a broken
+> agent.
+
+For `agentType: kargo` this supersedes the chart's own `kargo.kustomizationPath`
+(a path that must already exist in the container, which the chart could not
+provide). Setting both is a template error rather than a silently duplicated
+flag.
 
 ## What this package does not fix
 
@@ -457,9 +485,9 @@ consequences you should know before adopting this at scale:
   `akuity-cli`. The agent images themselves are chosen by Akuity at registration
   time and are not part of the chart, so they cannot be pinned here — only
   redirected to another registry. See [Private registries](#private-registries).
-- **The register Job cannot mount extra files.** That is what blocks
-  `--kustomization-path`, and with it any patch to the agent manifests Akuity
-  returns (including adding `imagePullSecrets` to the agent workloads).
+- **The agent manifests are still built by Akuity.** `agentKustomization`
+  patches them on the way out, but the resource set itself, and the images
+  chosen for it, are decided server-side at registration.
 
 ## Why this package ships Argo CD CRDs
 
@@ -522,7 +550,7 @@ against akuity.cloud, so there is no offline path.
 ```bash
 export AKUITY_API_KEY_ID=... AKUITY_API_KEY_SECRET=...
 export AKUITY_ORGANIZATION=... AKUITY_INSTANCE=...
-UP_CHART_VERSION=0.32.2-up.1 up test run tests/* --e2e
+UP_CHART_VERSION=0.32.2-up.2 up test run tests/* --e2e
 ```
 
 ## Versioning
@@ -537,7 +565,7 @@ hence the `-up.N` suffix, bumped for a package-only change and reset when
 | | |
 |---|---|
 | Upstream chart | `0.32.2` |
-| This package | `0.32.2-up.1` |
+| This package | `0.32.2-up.2` |
 
 ## Upstream
 

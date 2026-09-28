@@ -392,11 +392,42 @@ spec:
           property: dockerconfigjson
 ```
 
-**This covers the register Job only.** The agent workloads are applied by that
-Job from manifests Akuity returns, with their own ServiceAccounts, so their image
-pulls are outside this chart entirely. `argocd.argoprojCustomImageRegistry`
-redirects the argoproj images; if your cluster also needs credentials for those,
-that is an Akuity-side conversation.
+**This covers the register Job only.** The agent workloads come from manifests
+the Akuity API generates at registration time, which the Job applies verbatim —
+the chart never renders them, so no value here can add a pull secret to them.
+`get-agent-manifests` has no image or pull-secret flags either.
+
+What *is* reachable is the registry those images are pulled from, decided by
+`akuity argocd cluster create` at registration:
+
+| Flag | Exposed as | Effect |
+|---|---|---|
+| `--argoproj-custom-image-registry` | `argocd.argoprojCustomImageRegistry` | Argo CD (argoproj) images |
+| `--akuity-custom-image-registry` | *(not a chart value — pass via `extraArgs`)* | Akuity's own agent images |
+| `--kustomization-path` | *(not usable from this chart — see below)* | Kustomization applied to the rendered agent manifests |
+
+**Prefer redirecting the registry.** If your mirror needs no authentication,
+pointing both registries at it removes the problem rather than working around
+it — no pull secrets on the agent workloads at all:
+
+```yaml
+spec:
+  helm:
+    values:
+      argocd:
+        argoprojCustomImageRegistry: registry.internal.example.com/argoproj
+      extraArgs:
+        - --akuity-custom-image-registry
+        - registry.internal.example.com/akuity
+```
+
+If your mirror *does* need credentials, `--kustomization-path` is the CLI's
+answer — it patches the rendered agent manifests, which is where an
+`imagePullSecrets` patch would go. It is not usable from this chart today: the
+flag takes a path to a `kustomization.yaml` that must exist inside the register
+Job's container, and the chart has no way to mount a ConfigMap or volume into
+that Job. Closing that gap is a chart patch on our side, not an Akuity
+limitation.
 
 ## What this package does not fix
 
@@ -424,8 +455,11 @@ consequences you should know before adopting this at scale:
 - **Egress is required.** The register Job must reach `akuity.cloud` (or your
   self-hosted Akuity) from inside the control plane, and it pulls
   `akuity-cli`. The agent images themselves are chosen by Akuity at registration
-  time and are not part of the chart, so they cannot be mirrored or pinned here;
-  `argocd.argoprojCustomImageRegistry` only redirects the argoproj images.
+  time and are not part of the chart, so they cannot be pinned here — only
+  redirected to another registry. See [Private registries](#private-registries).
+- **The register Job cannot mount extra files.** That is what blocks
+  `--kustomization-path`, and with it any patch to the agent manifests Akuity
+  returns (including adding `imagePullSecrets` to the agent workloads).
 
 ## Why this package ships Argo CD CRDs
 

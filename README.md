@@ -285,7 +285,7 @@ kind: Controller
 metadata:
   name: controller-akuity-agent
 spec:
-  package: xpkg.upbound.io/upbound/controller-akuity-agent:0.32.2
+  package: xpkg.upbound.io/upbound/controller-akuity-agent:0.32.2-up.1
   # Picked up automatically — runtimeConfigRef defaults to name "default".
   runtimeConfigRef:
     name: default
@@ -322,10 +322,81 @@ kind: AddOn
 metadata:
   name: akuity-agent
 spec:
-  package: xpkg.upbound.io/upbound/addon-akuity-agent:0.32.2
+  package: xpkg.upbound.io/upbound/addon-akuity-agent:0.32.2-up.1
   runtimeConfigRef:
     name: default
 ```
+
+## Private registries
+
+The register Job pulls `akuity-cli`. This package defaults it to the Upbound
+mirror (`xpkg.upbound.io/upbound/akuity-cli`) rather than the chart's
+`quay.io/akuity/akuity-cli:latest`, but in a control plane that can only pull
+from an internal registry you need both your own mirror and a pull secret:
+
+```yaml
+spec:
+  helm:
+    values:
+      image:
+        repository: registry.internal.example.com/akuity/akuity-cli
+        tag: 0.32.2
+      imagePullSecrets:
+        - name: akuity-pull-secret
+```
+
+`imagePullSecrets` is added by `patches/0002-image-pull-secrets.patch` — the
+upstream chart has no such value, which is why the only alternative today is to
+patch the ServiceAccount by hand after each install:
+
+```bash
+# What this package's imagePullSecrets value replaces.
+kubectl -n akuity patch sa akuity-agent-register --type=merge \
+  -p '{"imagePullSecrets":[{"name":"akuity-pull-secret"}]}'
+```
+
+The Secret itself must already exist in the release namespace of every control
+plane. Deliver it the same way as the API key — a `SharedExternalSecret` with a
+`dockerconfigjson` target:
+
+```yaml
+apiVersion: spaces.upbound.io/v1alpha1
+kind: SharedExternalSecret
+metadata:
+  name: akuity-pull-secret
+  namespace: default
+spec:
+  controlPlaneSelector:
+    labelSelectors:
+      - matchLabels:
+          akuity.io/register: "true"
+  namespaceSelector:
+    names:
+      - akuity
+  externalSecretSpec:
+    refreshInterval: 1h
+    target:
+      # Must match the name used in imagePullSecrets above.
+      name: akuity-pull-secret
+      template:
+        type: kubernetes.io/dockerconfigjson
+        data:
+          .dockerconfigjson: "{{ .dockerconfigjson | toString }}"
+    secretStoreRef:
+      name: vault-backend
+      kind: ClusterSecretStore
+    data:
+      - secretKey: dockerconfigjson
+        remoteRef:
+          key: /platform/registry
+          property: dockerconfigjson
+```
+
+**This covers the register Job only.** The agent workloads are applied by that
+Job from manifests Akuity returns, with their own ServiceAccounts, so their image
+pulls are outside this chart entirely. `argocd.argoprojCustomImageRegistry`
+redirects the argoproj images; if your cluster also needs credentials for those,
+that is an Akuity-side conversation.
 
 ## What this package does not fix
 
@@ -345,6 +416,11 @@ consequences you should know before adopting this at scale:
 - **Hook leftovers.** The Job is `hook-succeeded` so it is cleaned up, but the
   ServiceAccount, ClusterRole and ClusterRoleBinding are `before-hook-creation`
   only and stay behind untracked.
+- **`extraArgs` quoting is patched, not fixed upstream.** The flags are
+  interpolated into a `sh -c` script and the chart does not quote them, so a
+  value containing a space is split into separate arguments.
+  `patches/0003-extra-args-quoting.patch` quotes each element; on the unpatched
+  chart, avoid spaces in `extraArgs`.
 - **Egress is required.** The register Job must reach `akuity.cloud` (or your
   self-hosted Akuity) from inside the control plane, and it pulls
   `akuity-cli`. The agent images themselves are chosen by Akuity at registration
@@ -412,8 +488,22 @@ against akuity.cloud, so there is no offline path.
 ```bash
 export AKUITY_API_KEY_ID=... AKUITY_API_KEY_SECRET=...
 export AKUITY_ORGANIZATION=... AKUITY_INSTANCE=...
-UP_CHART_VERSION=0.32.2 up test run tests/* --e2e
+UP_CHART_VERSION=0.32.2-up.1 up test run tests/* --e2e
 ```
+
+## Versioning
+
+The package version is **not** the chart version. `.chart-attributes` carries
+both: `CHART_VERSION` is the upstream chart this vendors, `PACKAGE_VERSION` is
+what gets published to the Marketplace. Because this package patches the chart,
+a fix on our side has to ship without overwriting an already-published tag —
+hence the `-up.N` suffix, bumped for a package-only change and reset when
+`CHART_VERSION` moves.
+
+| | |
+|---|---|
+| Upstream chart | `0.32.2` |
+| This package | `0.32.2-up.1` |
 
 ## Upstream
 

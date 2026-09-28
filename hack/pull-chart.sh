@@ -8,6 +8,14 @@
 # patches/0001-existing-secret.patch adds the standard `existingSecret` idiom so
 # the key can be delivered by a SharedExternalSecret instead.
 #
+# The other patches close gaps that block real installations:
+#   0002-image-pull-secrets.patch  adds `imagePullSecrets`, so the register image
+#       can come from an authenticated mirror in clusters that cannot pull from
+#       quay.io.
+#   0003-extra-args-quoting.patch  quotes each `extraArgs` element. The flags are
+#       interpolated into a `sh -c` script, so an unquoted value containing a
+#       space was word-split into separate arguments.
+#
 # Usage: hack/pull-chart.sh <dest-dir>   # writes <dest-dir>/chart.tgz
 set -euo pipefail
 
